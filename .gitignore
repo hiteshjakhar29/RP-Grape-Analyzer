@@ -7,3 +7,4 @@ __pycache__/
 *.png
 assets/reference_original.jpg
 .DS_Store
+app/models/
