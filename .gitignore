@@ -1,0 +1,9 @@
+.venv/
+__pycache__/
+*.pyc
+*.npz
+*.jpeg
+*.jpg
+*.png
+assets/reference_original.jpg
+.DS_Store

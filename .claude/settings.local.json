@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(python3 -c \"import json; d=json.load\\(open\\(''/Users/hitesh/Desktop/grape_analyzer/assetes/reference_mask_metadata.json''\\)\\); keys=list\\(d.keys\\(\\)\\)[:3]; print\\(''Keys sample:'', keys\\); print\\(''Entry 0:'', d[keys[0]]\\)\")",
+      "Bash(python3 -c \"import numpy as np; d=np.load\\(''/Users/hitesh/Desktop/grape_analyzer/assetes/reference_masks.npz''\\); print\\(''Keys:'', list\\(d.files\\)[:5]\\); m=d[''grape_1'']; print\\(''Shape:'', m.shape, ''dtype:'', m.dtype\\)\")",
+      "Bash(python3 -c \"import numpy as np; d=np.load\\(''/Users/hitesh/Desktop/grape_analyzer/assetes/reference_masks.npz''\\); m=d[''grape_1'']; print\\(''Unique values:'', np.unique\\(m\\)\\)\")",
+      "Bash(python3 -c \":*)",
+      "Bash(timeout 5 python3 -c \":*)"
+    ]
+  }
+}
