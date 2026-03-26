@@ -7,15 +7,17 @@ from openpyxl.utils import get_column_letter
 
 _HEADERS = [
     "Grape ID", "Group", "Ratio", "Row", "Day", "Area (px)",
-    "Mean R", "Mean G", "Mean B",
-    "Mean L*", "Mean a*", "Mean b*",
-    "Hue (°)", "Saturation", "Brightness",
+    "Mean R", "Std R", "Mean G", "Std G", "Mean B", "Std B",
+    "Mean L*", "Std L*", "Mean a*", "Std a*", "Mean b*", "Std b*",
+    "Hue (°)", "Std H", "Saturation", "Std S", "Brightness", "Std Br",
+    "Eccentricity",
 ]
 _KEYS = [
     "grape_id", "group", "ratio", "grape_row", "day", "area_px",
-    "mean_R", "mean_G", "mean_B",
-    "mean_L", "mean_a", "mean_b",
-    "mean_H", "mean_S", "mean_Br",
+    "mean_R", "std_R", "mean_G", "std_G", "mean_B", "std_B",
+    "mean_L", "std_L", "mean_a", "std_a", "mean_b", "std_b",
+    "mean_H", "std_H", "mean_S", "std_S", "mean_Br", "std_Br",
+    "eccentricity",
 ]
 
 _HDR_FILL  = PatternFill(start_color="1F4E79", end_color="1F4E79", fill_type="solid")

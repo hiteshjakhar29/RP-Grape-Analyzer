@@ -13,6 +13,7 @@ import platform
 import subprocess
 import tempfile
 
+import cv2
 import numpy as np
 from PIL import Image as PILImage
 
@@ -130,6 +131,7 @@ def measure_all_grapes(
                     by_id[gid] = {
                         "grape_id": gid,
                         "area_px":  int(float(row["area_px"])),
+                        # Mean values — from ImageJ
                         "mean_R":   round(float(row["mean_R"]),  4),
                         "mean_G":   round(float(row["mean_G"]),  4),
                         "mean_B":   round(float(row["mean_B"]),  4),
@@ -139,14 +141,25 @@ def measure_all_grapes(
                         "mean_H":   round(float(row["mean_H"]),  4),
                         "mean_S":   round(float(row["mean_S"]),  4),
                         "mean_Br":  round(float(row["mean_Br"]), 4),
+                        # StdDev values — from ImageJ (primary path)
+                        "std_R":    round(float(row["std_R"]),   4),
+                        "std_G":    round(float(row["std_G"]),   4),
+                        "std_B":    round(float(row["std_B"]),   4),
+                        "std_L":    round(float(row["std_L"]),   4),
+                        "std_a":    round(float(row["std_a"]),   4),
+                        "std_b":    round(float(row["std_b"]),   4),
+                        "std_H":    round(float(row["std_H"]),   4),
+                        "std_S":    round(float(row["std_S"]),   4),
+                        "std_Br":   round(float(row["std_Br"]),  4),
                     }
         except Exception:
             return _fallback_all(original_rgb, masks, gids)
 
-        # Return in metadata order; Python fallback for any grape ImageJ missed
+        # Merge shape metrics (eccentricity — Python only, no ImageJ equivalent)
         results = []
         for gid in gids:
             if gid in by_id:
+                by_id[gid].update(_compute_shape_metrics(masks.get(gid)))
                 results.append(by_id[gid])
             elif gid in masks:
                 results.append(_python_measure(original_rgb, masks[gid], gid))
@@ -155,6 +168,98 @@ def measure_all_grapes(
 
 def _fallback_all(original_rgb, masks, gids) -> list[dict]:
     return [_python_measure(original_rgb, masks[g], g) for g in gids if g in masks]
+
+
+def _compute_shape_metrics(mask: np.ndarray | None) -> dict:
+    """
+    Compute eccentricity from mask shape using OpenCV fitEllipse.
+
+    Uses the same formula as ImageJ's Fit Ellipse measurement:
+        eccentricity = sqrt(1 - (minor_axis / major_axis)^2)
+    Range: 0.0 (perfect circle) → 1.0 (line).
+    """
+    if mask is None or not np.any(mask > 0):
+        return {"eccentricity": 0.0}
+    contours, _ = cv2.findContours(mask, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_NONE)
+    if not contours:
+        return {"eccentricity": 0.0}
+    cnt = max(contours, key=cv2.contourArea)
+    if len(cnt) < 5:
+        return {"eccentricity": 0.0}
+    try:
+        _, (MA, ma), _ = cv2.fitEllipse(cnt)
+        major = max(MA, ma)
+        minor = min(MA, ma)
+        if major < 1e-6:
+            return {"eccentricity": 0.0}
+        return {"eccentricity": round(float(np.sqrt(1.0 - (minor / major) ** 2)), 4)}
+    except Exception:
+        return {"eccentricity": 0.0}
+
+
+def _compute_stddev(original_rgb: np.ndarray, mask: np.ndarray | None, grape_id: int) -> dict:
+    """
+    Compute per-channel StdDev for a grape mask using the same color-space
+    math as _python_measure.  Fallback only — not used when ImageJ succeeds.
+    """
+    _empty_std = {
+        "std_R": 0.0, "std_G": 0.0, "std_B": 0.0,
+        "std_L": 0.0, "std_a": 0.0, "std_b": 0.0,
+        "std_H": 0.0, "std_S": 0.0, "std_Br": 0.0,
+    }
+    if mask is None:
+        return _empty_std
+    ys, xs = np.where(mask > 0)
+    if len(xs) == 0:
+        return _empty_std
+
+    pixels = original_rgb[ys, xs].astype(np.float64)
+    R, G, B = pixels[:, 0], pixels[:, 1], pixels[:, 2]
+
+    # Lab
+    def linearize(c):
+        n = c / 255.0
+        return np.where(n <= 0.04045, n / 12.92, ((n + 0.055) / 1.055) ** 2.4)
+
+    Rl, Gl, Bl = linearize(R), linearize(G), linearize(B)
+    X = Rl * 0.4124564 + Gl * 0.3575761 + Bl * 0.1804375
+    Y = Rl * 0.2126729 + Gl * 0.7151522 + Bl * 0.0721750
+    Z = Rl * 0.0193339 + Gl * 0.1191920 + Bl * 0.9503041
+
+    def cie_f(t):
+        return np.where(t > 0.008856, np.cbrt(t), (903.3 * t + 16.0) / 116.0)
+
+    fx, fy, fz = cie_f(X / 0.95047), cie_f(Y / 1.00000), cie_f(Z / 1.08883)
+    L_arr = 116.0 * fy - 16.0
+    a_arr = 500.0 * (fx - fy)
+    b_arr = 200.0 * (fy - fz)
+
+    # HSB
+    Rn, Gn, Bn = R / 255.0, G / 255.0, B / 255.0
+    Cmax  = np.maximum(np.maximum(Rn, Gn), Bn)
+    Cmin  = np.minimum(np.minimum(Rn, Gn), Bn)
+    delta = Cmax - Cmin
+    hue   = np.zeros(len(R), dtype=np.float64)
+    d     = delta > 1e-10
+    mr = d & (Cmax == Rn)
+    mg = d & (Cmax == Gn)
+    mb = d & (Cmax == Bn)
+    hue[mr] = 60.0 * (((Gn[mr] - Bn[mr]) / delta[mr]) % 6.0)
+    hue[mg] = 60.0 * ((Bn[mg] - Rn[mg]) / delta[mg] + 2.0)
+    hue[mb] = 60.0 * ((Rn[mb] - Gn[mb]) / delta[mb] + 4.0)
+    S_arr = np.where(Cmax > 1e-10, delta / Cmax, 0.0)
+
+    return {
+        "std_R":  round(float(np.std(R)),     4),
+        "std_G":  round(float(np.std(G)),     4),
+        "std_B":  round(float(np.std(B)),     4),
+        "std_L":  round(float(np.std(L_arr)), 4),
+        "std_a":  round(float(np.std(a_arr)), 4),
+        "std_b":  round(float(np.std(b_arr)), 4),
+        "std_H":  round(float(np.std(hue)),   4),
+        "std_S":  round(float(np.std(S_arr)), 4),
+        "std_Br": round(float(np.std(Cmax)),  4),
+    }
 
 
 # ── Single-grape shim (backward-compat, used nowhere in the new pipeline) ─────
@@ -229,7 +334,9 @@ def _python_measure(original_rgb: np.ndarray, mask: np.ndarray, grape_id: int) -
     hue[mg] = 60.0 * ((Bn[mg] - Rn[mg]) / delta[mg] + 2.0)
     hue[mb] = 60.0 * ((Rn[mb] - Gn[mb]) / delta[mb] + 4.0)
 
-    return {
+    S_arr = np.where(Cmax > 1e-10, delta / Cmax, 0.0)
+
+    result = {
         "grape_id": grape_id,
         "area_px":  area_px,
         "mean_R":   round(mean_R,  4),
@@ -238,10 +345,21 @@ def _python_measure(original_rgb: np.ndarray, mask: np.ndarray, grape_id: int) -
         "mean_L":   round(mean_L,  4),
         "mean_a":   round(mean_a,  4),
         "mean_b":   round(mean_b,  4),
-        "mean_H":   round(float(np.mean(hue)), 4),
-        "mean_S":   round(float(np.mean(np.where(Cmax > 1e-10, delta / Cmax, 0.0))), 4),
-        "mean_Br":  round(float(np.mean(Cmax)), 4),
+        "mean_H":   round(float(np.mean(hue)),   4),
+        "mean_S":   round(float(np.mean(S_arr)),  4),
+        "mean_Br":  round(float(np.mean(Cmax)),   4),
+        "std_R":    round(float(np.std(R)),       4),
+        "std_G":    round(float(np.std(G)),       4),
+        "std_B":    round(float(np.std(B)),       4),
+        "std_L":    round(float(np.std(116.0 * fy - 16.0)), 4),
+        "std_a":    round(float(np.std(500.0 * (fx - fy))), 4),
+        "std_b":    round(float(np.std(200.0 * (fy - fz))), 4),
+        "std_H":    round(float(np.std(hue)),     4),
+        "std_S":    round(float(np.std(S_arr)),   4),
+        "std_Br":   round(float(np.std(Cmax)),    4),
     }
+    result.update(_compute_shape_metrics(mask))
+    return result
 
 
 def _empty(grape_id: int) -> dict:
@@ -250,4 +368,8 @@ def _empty(grape_id: int) -> dict:
         "mean_R": 0.0, "mean_G": 0.0, "mean_B": 0.0,
         "mean_L": 0.0, "mean_a": 0.0, "mean_b": 0.0,
         "mean_H": 0.0, "mean_S": 0.0, "mean_Br": 0.0,
+        "std_R":  0.0, "std_G":  0.0, "std_B":  0.0,
+        "std_L":  0.0, "std_a":  0.0, "std_b":  0.0,
+        "std_H":  0.0, "std_S":  0.0, "std_Br": 0.0,
+        "eccentricity": 0.0,
     }

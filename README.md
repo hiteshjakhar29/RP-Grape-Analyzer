@@ -1,313 +1,247 @@
-# 🍇 Grape Analyzer
+# Grape Analyzer
 
-Automated image analysis tool for measuring grape color and area changes over time.
+A Python desktop application that automates color and area measurement of 36 grapes photographed over a 300-day study. Replaces a manual ImageJ workflow — load one image and get all measurements automatically.
 
-**Measurement engine: ImageJ (via pyimagej) — the actual ImageJ runs inside Python.**
-
----
-
-## What it does
-
-1. Upload any grape image (out of your 300)
-2. Auto-detect all 36 grapes (Classical threshold + YOLOv8 hybrid)
-3. **ImageJ measures per grape**: Area (px² + mm²), RGB, Lab (L*, a*, b*), HSB
-4. Shows every processing step visually
-5. Exports CSV + Excel (36 rows, 1 per grape)
+**Measurement engine: Fiji/ImageJ (headless subprocess)** — all Mean and StdDev values are measured directly by ImageJ, identical to running the macro manually in Fiji.
 
 ---
 
-## Architecture
+## What It Does
 
+1. Load a grape session image (any of your 300 days)
+2. The app aligns it to a reference image, adapts pre-computed reference masks to the current grape sizes, and refines each boundary with GrabCut
+3. Fiji measures all 36 grapes in a single headless call — Area, RGB, Lab (L\*a\*b\*), HSB (Hue/Saturation/Brightness) with full Mean + StdDev
+4. Results shown in a 36-row table and exported to Excel
+
+---
+
+## Prerequisites
+
+| Requirement | Version | Notes |
+|---|---|---|
+| Python | 3.10+ | `python3 --version` to check |
+| Fiji (ImageJ) | Any recent | Must be installed manually — see below |
+| macOS | Apple Silicon or Intel | Windows/Linux supported with path changes |
+
+---
+
+## Installation Guide
+
+### Step 1 — Install Fiji
+
+Fiji is the ImageJ distribution used for all measurements. It must be installed **before** running the app.
+
+1. Go to **[https://fiji.sc](https://fiji.sc)** and click **Download**
+2. Select your platform (macOS, Windows, or Linux)
+3. Extract the downloaded archive
+
+**macOS — recommended install location:**
 ```
-Upload Image
-      ↓
-Python (OpenCV + YOLOv8) → detect 36 grapes → create ROI masks
-      ↓
-ImageJ (via pyimagej) → measures Area, RGB, Lab, HSB per grape
-  — same Lab Stack, HSB Stack, RGB Stack as your original macro
-  — identical results to running manually in Fiji
-      ↓
-Python → display in GUI → export CSV + Excel
+/Applications/FijiWorking/Fiji.app
 ```
+Drag `Fiji.app` from the downloaded `.dmg` or extracted folder into `/Applications/FijiWorking/`. Create the `FijiWorking` folder if it does not exist.
 
-**Why this matters for professor validation:**
-"Measurements use the ImageJ engine (pyimagej), running the same Lab Stack, HSB Stack, and RGB Stack algorithms as the original Fiji macro — automated via Python."
+> If you install Fiji elsewhere (e.g. `~/Applications/Fiji.app`), you can point the app to it via the Settings dialog on first launch.
+
+**Verify Fiji works** by double-clicking `Fiji.app` — the ImageJ window should open. Close it before using the analyzer.
 
 ---
 
-## Quick Start (Mac)
+### Step 2 — Install Python 3.10+
 
-### Prerequisites (one time only)
-
-**1. Install Homebrew** (if not installed):
+**macOS (using Homebrew — recommended):**
 ```bash
+# Install Homebrew if not already installed
 /bin/bash -c "$(curl -fsSL https://raw.githubusercontent.com/Homebrew/install/HEAD/install.sh)"
+
+# Install Python
+brew install python@3.12
 ```
 
-**2. Install Java** (required for ImageJ/pyimagej):
+**Verify:**
 ```bash
-brew install openjdk
+python3 --version
+# Should print Python 3.10 or higher
 ```
 
-That's all. The run script handles everything else automatically.
+**Windows:**
+Download the installer from [https://www.python.org/downloads/](https://www.python.org/downloads/). Check **"Add Python to PATH"** during install.
 
-### Run the app
+---
+
+### Step 3 — Clone the Repository
 
 ```bash
-cd grape_analyzer
+git clone https://github.com/hiteshjakhar29/RP-Grape-Analyzer.git
+cd RP-Grape-Analyzer
+```
+
+---
+
+### Step 4 — Run the App
+
+**macOS / Linux (recommended — handles venv + dependencies automatically):**
+```bash
 chmod +x run.sh
 ./run.sh
 ```
 
-**First run:** Downloads Fiji automatically (~300MB). This happens once only.
-**All subsequent runs:** Starts in seconds.
+`run.sh` will:
+- Create a Python virtual environment (`.venv/`) on first run
+- Install all dependencies from `requirements.txt`
+- Launch the app
 
----
-
-## How to Use
-
-1. Click **"📁 Upload Image"** → select any grape photo
-2. Click **"▶ Run Analysis"**
-3. Watch the **"📷 Processing Steps"** tab — see each stage
-4. Get results in **"📋 Measurements"** tab — 36 rows, 1 per grape
-5. Click **"💾 Open Output Folder"** → get CSV + Excel
-
----
-
-## Output Files
-
-Saved to `~/grape_analyzer_outputs/`:
-
-| File | Contents |
-|------|----------|
-| `*_measurements_*.csv` | 36 rows, 1 per grape, all metrics |
-| `*_measurements_*.xlsx` | Same + Group Summary sheet |
-| `*_final_overlay_*.png` | Labeled result image |
-| `*_mask_clean_*.png` | Binary mask |
-| `*_classical_overlay_*.png` | Classical segmentation |
-| `*_ml_overlay_*.png` | ML segmentation |
-
----
-
-## Output Columns (1 row per grape)
-
-| Column | Description | Source |
-|--------|-------------|--------|
-| `Grape_ID` | 1–36 | — |
-| `Group` | Coated / Control | Layout |
-| `Ratio` | 100:0 … 0:100 | Layout |
-| `Area_px2` | Area in pixels² | ImageJ |
-| `Area_mm2` | Area in mm² (if ruler detected) | ImageJ + scale |
-| `Mean_R/G/B` | Mean RGB (0–255) | ImageJ RGB Stack |
-| `Mean_L/a/b` | CIE L*a*b* | ImageJ Lab Stack |
-| `Mean_H/S/Brightness` | Hue/Sat/Brightness (0–255) | ImageJ HSB Stack |
-| `Measurement_Engine` | "ImageJ (pyimagej)" | — |
-
----
-
-## Project Structure
-
-```
-grape_analyzer/
-├── app/
-│   ├── main.py                  ← GUI (PySide6, dark theme)
-│   └── core/
-│       ├── pipeline.py          ← Segmentation (Classical + YOLOv8 hybrid)
-│       ├── imagej_measure.py    ← ImageJ measurements via pyimagej ★
-│       ├── measure.py           ← Python fallback measurements
-│       ├── export.py            ← CSV + Excel export
-│       └── qc.py                ← QC checks (36 grape count, area sanity)
-├── imagej_macros/
-│   └── PerGrape_Color_Macro.ijm ← Modified macro (per-grape, for manual use)
-├── requirements.txt
-├── run.sh                       ← One-click Mac launcher
-└── README.md
-```
-
----
-
-## Fallback Behavior
-
-If Java is not installed (ImageJ unavailable):
-- App still works using Python measurements (skimage/OpenCV)
-- QC tab shows a warning: "ImageJ not detected"
-- Expected accuracy vs ImageJ: ~1–5% on color metrics
-- Install Java anytime to switch to full ImageJ mode: `brew install openjdk`
-
----
-
-## Troubleshooting
-
-**"brew: command not found"**
-→ Install Homebrew first (see Prerequisites above)
-
-**"java: command not found"**
-→ Run: `brew install openjdk`
-
-**Fiji download taking long**
-→ Normal on first run (~300MB). Do not close the app. Subsequent runs are instant.
-
-**"Not 36 grapes detected"**
-→ Check QC Report tab. Try toggling ML on/off. Lighting may have changed.
-
----
-
-## Quick Start (Mac)
-
-### Step 1 — Open Terminal and go to this folder
+**Manual setup (if `run.sh` doesn't work):**
 ```bash
-cd ~/grape_analyzer
-```
-
-### Step 2 — Make the launcher executable (first time only)
-```bash
-chmod +x run.sh
-```
-
-### Step 3 — Run
-```bash
-./run.sh
-```
-
-That's it. The GUI will open automatically.
-
----
-
-## Manual Setup (if run.sh doesn't work)
-
-```bash
-# Create virtual environment
+# Create and activate virtual environment
 python3 -m venv .venv
-source .venv/bin/activate
+source .venv/bin/activate        # macOS/Linux
+# .venv\Scripts\activate         # Windows
 
 # Install dependencies
 pip install -r requirements.txt
 
-# Run
-python -m app.main
+# Launch
+python main.py
 ```
+
+---
+
+### Step 5 — Configure Fiji Path (if needed)
+
+On first launch, the app checks for Fiji at:
+
+| Platform | Default path checked |
+|---|---|
+| macOS | `/Applications/FijiWorking/Fiji.app/Contents/MacOS/fiji-macos-arm64` |
+| Windows | `C:/Fiji.app/fiji-windows-x64.exe` |
+| Linux | `/opt/Fiji.app/fiji-linux-x64` |
+
+If Fiji is not found at the default path, a **Settings dialog** appears — click **Browse** and navigate to your Fiji executable. The path is saved for all future sessions.
+
+The header bar shows a **green badge** when Fiji is detected, or **amber** when running in Python-fallback mode.
 
 ---
 
 ## How to Use
 
-1. Click **"📁 Upload Image"** → select your grape photo
-2. (Optional) Click **"📊 Load ImageJ CSV"** → load your `Whole_Color_Measurements.csv` for comparison
-3. Check/uncheck **"Use ML (YOLOv8)"** (recommended: ON)
-4. Click **"▶ Run Analysis"**
-5. Watch the processing steps appear in the **"📷 Processing Steps"** tab
-6. Check results in **"📋 Measurements"** tab (36 rows, 1 per grape)
-7. Check **"📊 ImageJ Comparison"** tab for error % vs your baseline
-8. Click **"💾 Open Output Folder"** to get your CSV + Excel files
+1. Click **Load Image** → select any grape session photo (PNG/JPG)
+2. Enter the **day number** for that image (1–300)
+3. Click **Run Analysis** — the pipeline runs automatically
+4. Watch the **6 pipeline thumbnails** update in real time (click any to enlarge)
+5. Results appear in the **36-row table** below
+6. Click **Export Excel** to save the `.xlsx` file
 
 ---
 
-## Output Files
+## Output
 
-All saved to `~/grape_analyzer_outputs/`:
+Excel file with one row per grape (36 total):
 
-| File | Contents |
-|------|----------|
-| `*_measurements_*.csv` | 36 rows, 1 per grape, all metrics |
-| `*_measurements_*.xlsx` | Same + Group Summary + ImageJ Comparison sheets |
-| `*_original_*.png` | Original image |
-| `*_mask_clean_*.png` | Binary mask |
-| `*_classical_overlay_*.png` | Classical segmentation result |
-| `*_ml_overlay_*.png` | ML segmentation result |
-| `*_final_overlay_*.png` | Final chosen result with grape IDs |
+| Column | Source |
+|---|---|
+| Grape ID, Group (Coated/Control), Ratio, Row, Day | Layout metadata |
+| Area (px) | ImageJ |
+| Mean R/G/B, Std R/G/B | ImageJ — raw 0–255 |
+| Mean L\*, Std L\* | ImageJ — L\* range 0–100 |
+| Mean a\*, Std a\* | ImageJ — a\* range −128 to +127 |
+| Mean b\*, Std b\* | ImageJ — b\* range −128 to +127 |
+| Hue (°), Std H | ImageJ — H rescaled to 0–360° |
+| Saturation, Std S | ImageJ — S rescaled to 0–1 |
+| Brightness, Std Br | ImageJ — Br rescaled to 0–1 |
+| Eccentricity | Python (OpenCV `fitEllipse`) |
 
----
-
-## Output Columns (1 row per grape)
-
-| Column | Description |
-|--------|-------------|
-| `Grape_ID` | 1–36 |
-| `Group` | Coated / Control |
-| `Ratio` | 100:0, 80:20, 60:40, 40:60, 20:80, 0:100 |
-| `Area_px2` | Area in pixels² |
-| `Area_mm2` | Area in mm² (if ruler detected) |
-| `Mean_R/G/B` | Mean RGB values (0–255) |
-| `Mean_L/a/b` | CIE L*a*b* values |
-| `Mean_H/S/Brightness` | Hue, Saturation, Brightness (0–255 scale, matches ImageJ) |
+> If Fiji is not available, all values except eccentricity fall back to Python formulas that are mathematically equivalent to ImageJ (same CIE D65 Lab pipeline, same Java `Color.RGBtoHSB` algorithm).
 
 ---
 
-## ImageJ Integration
+## Image Layout (Fixed)
 
-### Using the macro manually in Fiji
-1. Open Fiji
-2. Go to **Plugins → Macros → Run...**
-3. Select `imagej_macros/PerGrape_Color_Macro.ijm`
-4. Choose your image folder
+```
+| 6 rows × 2 groups | Coated (left) | Control (right) |
+Each cell has 3 grapes → 6 × 2 × 3 = 36 grapes total
 
-### Automated (if Fiji is installed)
-The app will auto-detect Fiji at:
-- `/Applications/Fiji.app/` (Mac)
-- `~/Applications/Fiji.app/` (Mac user install)
+Row 1: Ratio 100:0
+Row 2: Ratio  80:20
+Row 3: Ratio  60:40
+Row 4: Ratio  40:60
+Row 5: Ratio  20:80
+Row 6: Ratio   0:100
+```
 
----
-
-## Segmentation Strategy (Hybrid)
-
-The app runs two segmentation methods and picks the best:
-
-1. **Classical (ImageJ-style)**: RGB threshold (Blue < 136) + watershed
-   - Fast, deterministic, matches ImageJ logic exactly
-   
-2. **ML (YOLOv8-seg)**: Deep learning object segmentation
-   - More robust when lighting changes
-   - Downloads model automatically (~6MB) on first run
-
-**Selection rule**: whichever method detects exactly 36 (or closest to 36) grapes wins.
-
----
-
-## Accuracy vs ImageJ
-
-| Metric | Expected Error |
-|--------|---------------|
-| Area | < 3% (same threshold logic) |
-| RGB | < 2% |
-| Lab | < 2% |
-| HSB | < 3% |
-
-Errors increase if lighting changes significantly between images.
-
----
-
-## Troubleshooting
-
-**"Not 36 grapes detected"**
-→ Check QC Report tab for details
-→ Lighting may have changed — normalization should help
-→ Try toggling ML on/off
-
-**App won't start**
-→ Make sure Python 3.10+ is installed: `python3 --version`
-→ Try: `pip install PySide6` manually
-
-**YOLOv8 slow on first run**
-→ It downloads the model once (~6MB). Subsequent runs are faster.
+Grape positions are **fixed** across all 300 days. The app uses pre-computed reference masks from an intermediate reference day (day 150) and adapts them per session.
 
 ---
 
 ## Project Structure
 
 ```
-grape_analyzer/
-├── app/
-│   ├── main.py              ← GUI entry point
-│   └── core/
-│       ├── pipeline.py      ← Segmentation (classical + ML hybrid)
-│       ├── measure.py       ← Color measurements (RGB, Lab, HSB)
-│       ├── export.py        ← CSV/Excel export
-│       ├── qc.py            ← Quality control checks
-│       └── imagej_runner.py ← Fiji/ImageJ integration
-├── imagej_macros/
-│   └── PerGrape_Color_Macro.ijm  ← Modified ImageJ macro (per-grape)
-├── outputs/                 ← Output folder (auto-created)
+RP-Grape-Analyzer/
+├── main.py                    ← App entry point
+├── run.sh                     ← One-click launcher (Mac/Linux)
+├── config.py                  ← Paths, REF_DAY = 150
 ├── requirements.txt
-├── run.sh                   ← One-click launcher (Mac)
-└── README.md
+│
+├── core/
+│   ├── image_pipeline.py      ← Background removal, HSV binary segmentation (+ CLAHE shadow fix)
+│   ├── mask_engine.py         ← Reference mask loading, alignment, adapt_mask, GrabCut refinement
+│   ├── color_engine.py        ← Fiji subprocess call + Python fallback measurements
+│   └── exporter.py            ← Excel export
+│
+├── ui/
+│   ├── main_window.py         ← Main window, AnalysisWorker thread, toolbar
+│   ├── pipeline_viewer.py     ← 6-step clickable thumbnail strip
+│   └── results_table.py       ← 36-row dark-theme results table
+│
+└── assetes/
+    ├── measure_grapes_batch.ijm   ← ImageJ macro (all 36 grapes in one call)
+    └── reference_masks.npz        ← Pre-computed reference masks (gitignored — not in repo)
 ```
+
+> **`reference_masks.npz` is not included in the repository** (gitignored). It must be generated from your own reference image using the mask generation step in the pipeline, or provided separately.
+
+---
+
+## Troubleshooting
+
+**App starts but Fiji badge is amber (fallback mode)**
+→ Fiji was not found at the default path. Click Settings on the toolbar and point to your Fiji executable.
+
+**"Permission denied" when running `./run.sh`**
+```bash
+chmod +x run.sh
+```
+
+**`python3: command not found`**
+→ Install Python 3.10+ (see Step 2 above). On macOS after Homebrew install, try `python3.12` explicitly.
+
+**`pip install` fails with SSL error**
+```bash
+pip install --trusted-host pypi.org --trusted-host files.pythonhosted.org -r requirements.txt
+```
+
+**Fiji takes a long time on first analysis**
+→ Normal — Fiji starts a JVM on first run. Subsequent analyses of the same session are faster. The app has a 5-minute timeout.
+
+**Not all 36 grapes detected**
+→ The reference masks (`reference_masks.npz`) may not be present. Ensure this file is in `assetes/` before running.
+
+**Windows: Fiji path not found**
+→ Open `config.py` and set `IMAGEJ_PATH` to your Fiji executable path, e.g. `C:/Fiji.app/fiji-windows-x64.exe`. Or use the Settings dialog in-app.
+
+---
+
+## Dependencies
+
+Installed automatically by `run.sh` / `pip install -r requirements.txt`:
+
+```
+PySide6        — GUI framework
+numpy          — Array operations
+opencv-python  — Image processing, GrabCut, watershed
+Pillow         — Image I/O
+scipy          — Morphological operations
+openpyxl       — Excel export
+```
+
+No Java installation required — Fiji bundles its own JVM.

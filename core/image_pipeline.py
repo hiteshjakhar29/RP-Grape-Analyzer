@@ -67,9 +67,21 @@ def generate_binary(bg_removed: np.ndarray) -> np.ndarray:
     5. Remove small noise blobs
     """
     hsv = cv2.cvtColor(bg_removed, cv2.COLOR_RGB2HSV)
+
+    # ── Shadow correction (segmentation path only) ───────────────────────────
+    # CLAHE on V lifts shadow-covered grape pixels above the V>55 threshold.
+    # H and S are untouched so hue-based grape/grid discrimination is unaffected.
+    # clipLimit=2.0: conservative boost; tileGridSize=(8,8): ~300x340 px per tile
+    # at reference resolution — larger than one grape, keeps local context.
+    try:
+        clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
+        hsv[:, :, 2] = clahe.apply(hsv[:, :, 2])
+    except Exception:
+        pass  # fallback: proceed with unenhanced V (pre-improvement behaviour)
+
     H = hsv[:, :, 0]  # 0-179 in OpenCV
     S = hsv[:, :, 1]  # 0-255
-    V = hsv[:, :, 2]  # 0-255
+    V = hsv[:, :, 2]  # 0-255 (CLAHE-enhanced)
 
     # Grape color: yellow-green hue
     is_grape = (H >= 12) & (H <= 100) & (S > 25) & (V > 55)

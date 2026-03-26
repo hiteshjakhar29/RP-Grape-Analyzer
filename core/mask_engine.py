@@ -10,6 +10,32 @@ from scipy.ndimage import binary_fill_holes
 
 
 # ─────────────────────────────────────────────
+# Day-aware tolerance helpers
+# ─────────────────────────────────────────────
+
+def _day_tolerances(day: int, ref_day: int) -> tuple[float, float]:
+    """
+    Compute (shrink_tol, grow_tol) based on how far the session day is from
+    the reference day.
+
+    Grapes shrink over 300 days.  The reference image was taken at ref_day
+    (an intermediate day), so:
+      - day < ref_day  → grapes are LARGER  than reference → raise grow_tol
+      - day > ref_day  → grapes are SMALLER than reference → raise shrink_tol
+
+    Linear interpolation between default and max tolerances:
+      shrink_tol: 0.35 (at ref_day) → 0.70 (at day 300)
+      grow_tol  : 0.40 (at ref_day) → 0.60 (at day 0)
+    """
+    total = 300
+    past   = max(0.0, (day - ref_day) / max(1, total - ref_day))
+    before = max(0.0, (ref_day - day) / max(1, ref_day))
+    shrink_tol = 0.35 + past   * 0.35   # 0.35 → 0.70
+    grow_tol   = 0.40 + before * 0.20   # 0.40 → 0.60
+    return shrink_tol, grow_tol
+
+
+# ─────────────────────────────────────────────
 # Reference resolution constants
 # ─────────────────────────────────────────────
 
@@ -122,6 +148,93 @@ def align_image(new_image: np.ndarray, day0_reference: np.ndarray) -> np.ndarray
 # Adaptive mask fitting
 # ─────────────────────────────────────────────
 
+def _watershed_split_blob(
+    blob_binary: np.ndarray,
+    ref_centroid: tuple,
+    ref_area: int,
+    offset_x: int,
+    offset_y: int,
+) -> np.ndarray | None:
+    """
+    Attempt to split an oversized blob (two touching grapes) using distance-
+    transform watershed.
+
+    Returns a uint8 binary mask (same shape as blob_binary) containing only
+    the sub-region closest to ref_centroid, or None if the split is ambiguous
+    or fails (caller falls through to existing behaviour).
+
+    Parameters
+    ----------
+    blob_binary  : uint8 (H×W), the oversized blob in search-window coordinates
+    ref_centroid : (cx, cy) in full-image coordinates
+    ref_area     : expected area of one grape from the reference mask
+    offset_x     : x of the search window's top-left corner in the full image
+    offset_y     : y of the search window's top-left corner in the full image
+    """
+    try:
+        # ── Step 1: Distance transform ──────────────────────────────────────
+        dist = cv2.distanceTransform(blob_binary, cv2.DIST_L2, 5)
+
+        # ── Step 2: Smooth + threshold to find peak seed regions ────────────
+        dist_smooth = cv2.GaussianBlur(dist, (5, 5), 0)
+        thresh_val = 0.60 * float(dist_smooth.max())
+        if thresh_val < 3.0:
+            return None  # blob too thin — no meaningful peaks
+
+        _, peak_mask = cv2.threshold(
+            dist_smooth, thresh_val, 255, cv2.THRESH_BINARY
+        )
+        peak_mask = peak_mask.astype(np.uint8)
+
+        n_seeds, seed_labels = cv2.connectedComponents(peak_mask, connectivity=8)
+        # n_seeds includes background (label 0); real seeds are 1..n_seeds-1
+        if n_seeds - 1 < 2:
+            return None  # single peak → not a merged pair; abort
+
+        # ── Step 3: Watershed ────────────────────────────────────────────────
+        # cv2.watershed needs a 3-channel BGR image and int32 marker array.
+        blob_3ch = cv2.cvtColor(
+            np.clip(dist_smooth, 0, 255).astype(np.uint8), cv2.COLOR_GRAY2BGR
+        )
+        markers = seed_labels.astype(np.int32)
+        cv2.watershed(blob_3ch, markers)
+        # After watershed: -1 = boundary pixels, 1..n-1 = regions
+
+        # ── Step 4: Select region containing reference centroid ──────────────
+        bh, bw = blob_binary.shape[:2]
+        local_cx = int(round(ref_centroid[0] - offset_x))
+        local_cy = int(round(ref_centroid[1] - offset_y))
+        local_cx = max(0, min(bw - 1, local_cx))
+        local_cy = max(0, min(bh - 1, local_cy))
+
+        target_label = int(markers[local_cy, local_cx])
+        if target_label <= 0:
+            # Centroid landed on a boundary line; poll 5×5 neighbourhood
+            region = markers[
+                max(0, local_cy - 2): min(bh, local_cy + 3),
+                max(0, local_cx - 2): min(bw, local_cx + 3),
+            ]
+            valid = region[region > 0].flatten()
+            if len(valid) == 0:
+                return None
+            counts = np.bincount(valid)
+            target_label = int(counts.argmax())
+            if target_label <= 0:
+                return None
+
+        # ── Step 5: Area sanity check ────────────────────────────────────────
+        selected = ((markers == target_label) & (blob_binary > 0)).astype(np.uint8) * 255
+        selected_area = int(np.sum(selected > 0))
+        # Accept if selected region is between 40% and 110% of one reference grape
+        if not (ref_area * 0.40 <= selected_area <= ref_area * 1.10):
+            return None
+
+        return selected
+
+    except Exception:
+        return None
+
+
 def adapt_mask(
     day0_mask: np.ndarray,
     session_binary: np.ndarray,
@@ -129,26 +242,32 @@ def adapt_mask(
     shrink_tol: float = 0.35,
     grow_tol: float   = 0.40,
     search_pad: int   = 50,
+    day: int          = -1,
+    ref_day: int      = 150,
 ) -> np.ndarray:
     """
     Adapt reference mask to current session grape shape.
 
-    The grape can:
-    - Shrink up to 35% (after reference day — drying over time)
-    - Grow up to 40% (before reference day — larger when fresh)
-    - Shift slightly within search_pad pixels (default 50 px at reference scale)
+    The grape can shrink (drying over time) or grow (session earlier than
+    reference day).  Pass ``day`` and ``ref_day`` to automatically scale
+    the tolerances based on how far the session is from the reference day:
+      - day < ref_day → larger grow_tol   (grape is still big)
+      - day > ref_day → larger shrink_tol (grape has shrunken more)
 
-    If the reference mask and session binary have different shapes (e.g. different
-    scan resolutions), the reference mask is proportionally scaled to match the
-    session binary before comparison.
+    If the reference mask and session binary have different shapes, the
+    reference mask is proportionally scaled to match the session binary.
 
     Strategy:
-    1. Find bounding box of (scaled) reference mask + search_pad
-    2. Look for grape blob in that region of session binary
-    3. If found and area within tolerance → use session blob shape
-    4. If shrank beyond tolerance → intersect session blob with reference mask
-    5. If no blob found → apply progressive erosion to reference mask
+    1. Compute day-aware tolerances (if day >= 0)
+    2. Find bounding box of (scaled) reference mask + search_pad
+    3. Look for grape blob in that region of session binary
+    4. If found and area within tolerance → use session blob shape
+    5. If shrank beyond tolerance → intersect session blob with reference mask
+    6. If no blob found → apply progressive erosion to reference mask
     """
+    # Override default tolerances with day-aware values when day is known
+    if day >= 0:
+        shrink_tol, grow_tol = _day_tolerances(day, ref_day)
     # ── Scale reference mask to match session binary if needed ──
     bin_h, bin_w = session_binary.shape[:2]
     day0_mask_scaled = _scale_mask(day0_mask, bin_h, bin_w)
@@ -194,6 +313,24 @@ def adapt_mask(
     if best_label > 0 and best_score < (pad_scaled * 2):
         session_area = stats[best_label, cv2.CC_STAT_AREA]
         ratio = session_area / day0_area
+
+        # ── Upper bound check: oversized blob likely contains two merged grapes
+        if ratio > (1 + grow_tol):
+            blob_candidate = (labels == best_label).astype(np.uint8) * 255
+            split_result = _watershed_split_blob(
+                blob_candidate,
+                ref_centroid=(day0_cx, day0_cy),
+                ref_area=day0_area,
+                offset_x=x1,
+                offset_y=y1,
+            )
+            if split_result is not None:
+                full = np.zeros((h, w), dtype=np.uint8)
+                full[y1:y2, x1:x2] = split_result
+                return full
+            # Split failed or ambiguous → fall through to accept merged blob
+            # (better starting point for GrabCut than eroded reference mask)
+        # ── End upper bound check ─────────────────────────────────────────────
 
         if ratio >= (1 - shrink_tol):
             blob        = (labels == best_label).astype(np.uint8) * 255
@@ -257,6 +394,77 @@ def adapt_mask(
     if np.sum(eroded > 0) > 500:
         return eroded
     return day0_mask_scaled
+
+
+# ─────────────────────────────────────────────
+# GrabCut boundary refinement
+# ─────────────────────────────────────────────
+
+def refine_mask_grabcut(
+    image_rgb: np.ndarray,
+    mask: np.ndarray,
+    pad: int = 15,
+) -> np.ndarray:
+    """
+    Refine a binary grape mask using GrabCut on the original image.
+
+    Uses the adapted mask as the initialiser: the eroded centre is marked as
+    definite foreground, the rest of the mask as probable foreground, and
+    everything outside the padded bounding box as definite background.
+
+    Returns an improved uint8 mask (0/255).  Falls back to the original mask
+    if GrabCut fails, produces an empty result, or shifts the area by >40%.
+    """
+    h, w = image_rgb.shape[:2]
+    ys, xs = np.where(mask > 0)
+    if len(xs) == 0:
+        return mask
+
+    # Padded bounding box
+    x1 = max(0, int(xs.min()) - pad)
+    x2 = min(w, int(xs.max()) + pad + 1)
+    y1 = max(0, int(ys.min()) - pad)
+    y2 = min(h, int(ys.max()) + pad + 1)
+
+    # GrabCut needs at least a few pixels in each dimension
+    if (x2 - x1) < 10 or (y2 - y1) < 10:
+        return mask
+
+    crop_bgr  = cv2.cvtColor(image_rgb[y1:y2, x1:x2], cv2.COLOR_RGB2BGR)
+    crop_mask = mask[y1:y2, x1:x2]
+
+    # Build GrabCut initialisation mask
+    gc_mask = np.full(crop_bgr.shape[:2], cv2.GC_BGD, dtype=np.uint8)
+    gc_mask[crop_mask > 0] = cv2.GC_PR_FGD   # probable foreground
+
+    # Eroded centre → sure foreground
+    k = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (5, 5))
+    inner = cv2.erode(crop_mask, k, iterations=2)
+    gc_mask[inner > 0] = cv2.GC_FGD
+
+    try:
+        bgd_model = np.zeros((1, 65), np.float64)
+        fgd_model = np.zeros((1, 65), np.float64)
+        cv2.grabCut(crop_bgr, gc_mask, None, bgd_model, fgd_model,
+                    3, cv2.GC_INIT_WITH_MASK)
+
+        refined_crop = np.where(
+            (gc_mask == cv2.GC_FGD) | (gc_mask == cv2.GC_PR_FGD), 255, 0
+        ).astype(np.uint8)
+        refined_crop = binary_fill_holes(refined_crop > 0).astype(np.uint8) * 255
+
+        # Reject if area shifted by more than 40%
+        orig_area = int(np.sum(crop_mask > 0))
+        new_area  = int(np.sum(refined_crop > 0))
+        if orig_area > 0 and abs(new_area - orig_area) / orig_area > 0.40:
+            return mask
+
+        full = mask.copy()
+        full[y1:y2, x1:x2] = refined_crop
+        return full
+
+    except Exception:
+        return mask
 
 
 # ─────────────────────────────────────────────

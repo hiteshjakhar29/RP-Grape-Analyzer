@@ -33,16 +33,16 @@ class PipelineViewer(QWidget):
 
         for i, (title, subtitle) in enumerate(STEP_LABELS):
             frame = QVBoxLayout()
-            frame.setSpacing(2)
+            frame.setSpacing(3)
 
             lbl_title = QLabel(f"<b>{title}</b><br><small>{subtitle}</small>")
             lbl_title.setAlignment(Qt.AlignCenter)
-            lbl_title.setStyleSheet("color: #ccc; font-size: 11px;")
+            lbl_title.setStyleSheet("color: #6C7086; font-size: 11px; background: transparent;")
 
             thumb = _ClickableLabel(i, self.step_clicked)
             thumb.setFixedSize(180, 135)
             thumb.setStyleSheet(
-                "border: 2px solid #555; border-radius: 4px; background: #2a2a2a;"
+                "border: 1px solid #3A3A52; border-radius: 6px; background: #2A2A3C; color: #585B70;"
             )
             thumb.setAlignment(Qt.AlignCenter)
             thumb.setText("—")
@@ -66,7 +66,7 @@ class PipelineViewer(QWidget):
         self.thumbs[step_idx].setPixmap(pix)
         self.thumbs[step_idx].setText("")
         self.thumbs[step_idx].setStyleSheet(
-            "border: 2px solid #4CAF50; border-radius: 4px;"
+            "border: 2px solid #A6E3A1; border-radius: 6px;"
         )
 
 

@@ -16,24 +16,34 @@ COLUMNS = [
     ("Day",        "day"),
     ("Area (px)",  "area_px"),
     ("Mean R",     "mean_R"),
+    ("Std R",      "std_R"),
     ("Mean G",     "mean_G"),
+    ("Std G",      "std_G"),
     ("Mean B",     "mean_B"),
+    ("Std B",      "std_B"),
     ("Mean L*",    "mean_L"),
+    ("Std L*",     "std_L"),
     ("Mean a*",    "mean_a"),
+    ("Std a*",     "std_a"),
     ("Mean b*",    "mean_b"),
+    ("Std b*",     "std_b"),
     ("Hue (°)",    "mean_H"),
+    ("Std H",      "std_H"),
     ("Sat",        "mean_S"),
+    ("Std S",      "std_S"),
     ("Brightness", "mean_Br"),
+    ("Std Br",     "std_Br"),
+    ("Eccentricity", "eccentricity"),
 ]
 
-# Row backgrounds — alternating white / light gray
-_ROW_ODD  = QColor(0xFF, 0xFF, 0xFF)   # white       (0-indexed even rows)
-_ROW_EVEN = QColor(0xF5, 0xF5, 0xF5)   # light gray  (0-indexed odd rows)
+# Row backgrounds — dark theme alternating rows
+_ROW_ODD  = QColor(0x2A, 0x2A, 0x3C)   # surface (even rows)
+_ROW_EVEN = QColor(0x24, 0x24, 0x34)   # slightly darker (odd rows)
 
 # Text colors
-_TEXT_DARK    = QColor(0x1A, 0x1A, 0x1A)   # near-black for all data cells
-_COATED_TEXT  = QColor(0x1A, 0x52, 0x76)   # dark blue  — Group cell, Coated
-_CONTROL_TEXT = QColor(0x78, 0x42, 0x12)   # dark orange — Group cell, Control
+_TEXT_DARK    = QColor(0xCD, 0xD6, 0xF4)   # Catppuccin text
+_COATED_TEXT  = QColor(0x89, 0xB4, 0xFA)   # blue  — Group cell, Coated
+_CONTROL_TEXT = QColor(0xFA, 0xB3, 0x87)   # peach — Group cell, Control
 
 # Index of the "Group" column (resolved once at module load)
 _GROUP_COL = next(i for i, (_, k) in enumerate(COLUMNS) if k == "group")
@@ -52,6 +62,48 @@ class ResultsTable(QTableWidget):
         self.horizontalHeader().setFont(bold)
         self.setEditTriggers(QTableWidget.NoEditTriggers)
         self.setSelectionBehavior(QTableWidget.SelectRows)
+        self.setStyleSheet("""
+            QTableWidget {
+                background: #2A2A3C;
+                color: #CDD6F4;
+                border: 1px solid #3A3A52;
+                border-radius: 6px;
+                gridline-color: #313244;
+                font-size: 12px;
+            }
+            QHeaderView::section {
+                background: #1E1E2E;
+                color: #89B4FA;
+                border: none;
+                border-right: 1px solid #3A3A52;
+                border-bottom: 1px solid #3A3A52;
+                padding: 5px 8px;
+                font-weight: bold;
+                font-size: 12px;
+            }
+            QTableWidget::item:selected {
+                background: #313244;
+                color: #CDD6F4;
+            }
+            QScrollBar:vertical {
+                background: #1E1E2E;
+                width: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:vertical {
+                background: #585B70;
+                border-radius: 4px;
+            }
+            QScrollBar:horizontal {
+                background: #1E1E2E;
+                height: 8px;
+                border-radius: 4px;
+            }
+            QScrollBar::handle:horizontal {
+                background: #585B70;
+                border-radius: 4px;
+            }
+        """)
 
     def populate(self, results: list) -> None:
         """Fill the table with a list of measurement dicts."""

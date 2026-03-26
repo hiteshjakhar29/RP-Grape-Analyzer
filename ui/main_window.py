@@ -2,15 +2,19 @@
 main_window.py — PySide6 main window for Grape Analyzer.
 
 Layout:
-┌────────────────────────────────────────────────────────────────┐
-│ TOOLBAR: [📂 Load Image]  Day:[___]  [▶ Run Analysis]  [💾 Export] │
-├────────────────────────────────────────────────────────────────┤
-│ PIPELINE VIEWER (6 clickable thumbnails)                       │
-├────────────────────────────────────────────────────────────────┤
-│ RESULTS TABLE (36 rows × 15 columns)                           │
-├────────────────────────────────────────────────────────────────┤
-│ STATUS BAR  ████████░░  "Processing grape 12/36..."            │
-└────────────────────────────────────────────────────────────────┘
+┌─────────────────────────────────────────────────────────────────┐
+│ HEADER BAR: app title + Fiji status badge                       │
+├─────────────────────────────────────────────────────────────────┤
+│ TOOLBAR: [Load Image]  <filename>  |  Day:[___]  [Run]  [Export]│
+├─────────────────────────────────────────────────────────────────┤
+│ PIPELINE VIEWER (6 clickable thumbnails)                        │
+├─────────────────────────────────────────────────────────────────┤
+│ RESULTS TABLE  ─or─  EMPTY STATE hint                           │
+├─────────────────────────────────────────────────────────────────┤
+│ PROGRESS BAR (hidden unless running)                            │
+├─────────────────────────────────────────────────────────────────┤
+│ STATUS BAR                                                      │
+└─────────────────────────────────────────────────────────────────┘
 """
 
 import os
@@ -21,10 +25,35 @@ from PySide6.QtWidgets import (
     QMainWindow, QWidget, QVBoxLayout, QHBoxLayout,
     QPushButton, QFileDialog, QLabel, QSpinBox,
     QProgressBar, QStatusBar, QDialog, QScrollArea,
-    QMessageBox,
+    QMessageBox, QFrame, QStackedWidget,
 )
 from PySide6.QtCore import Qt, QThread, Signal, QTimer
-from PySide6.QtGui import QPixmap, QImage
+from PySide6.QtGui import QPixmap, QImage, QFont
+
+
+# ─────────────────────────────── Colour palette ──────────────────────────────
+
+_C = {
+    "bg":          "#1E1E2E",   # main background
+    "surface":     "#2A2A3C",   # cards / toolbar
+    "border":      "#3A3A52",   # subtle dividers
+    "text":        "#CDD6F4",   # primary text
+    "subtext":     "#6C7086",   # muted labels
+    "accent_blue": "#89B4FA",   # Load button
+    "blue_dark":   "#1E66F5",
+    "blue_hover":  "#1558D6",
+    "accent_green":"#A6E3A1",   # Run button
+    "green_dark":  "#40A02B",
+    "green_hover": "#368A24",
+    "accent_amber":"#FAB387",   # Export button
+    "amber_dark":  "#FE640B",
+    "amber_hover": "#E55A08",
+    "disabled_bg": "#313244",
+    "disabled_txt":"#585B70",
+    "progress_fg": "#89DCEB",
+    "fiji_ok":     "#A6E3A1",
+    "fiji_warn":   "#FAB387",
+}
 
 
 class MainWindow(QMainWindow):
@@ -37,110 +66,281 @@ class MainWindow(QMainWindow):
         self._pipeline_steps: dict = {}
         self._worker: "AnalysisWorker | None" = None
         self._setup_ui()
-        # Defer ImageJ detection until after the event loop starts so the main
-        # window is fully visible before any dialog is shown.
-        QTimer.singleShot(200, self._setup_imagej)
+        QTimer.singleShot(300, self._setup_imagej)
 
-    # ─────────────────────────────── UI Setup ────────────────────────────
+    # ─────────────────────────────── UI Setup ────────────────────────────────
 
     def _setup_ui(self):
+        self.setStyleSheet(f"QMainWindow, QWidget {{ background: {_C['bg']}; color: {_C['text']}; }}")
+
         central = QWidget()
         self.setCentralWidget(central)
-        layout = QVBoxLayout(central)
-        layout.setSpacing(6)
+        root = QVBoxLayout(central)
+        root.setSpacing(0)
+        root.setContentsMargins(0, 0, 0, 0)
 
-        # ── Toolbar ──
-        toolbar = QHBoxLayout()
-        toolbar.setSpacing(8)
+        # ── Header bar ────────────────────────────────────────────────────────
+        header = QWidget()
+        header.setFixedHeight(48)
+        header.setStyleSheet(f"""
+            QWidget {{
+                background: {_C['surface']};
+                border-bottom: 1px solid {_C['border']};
+            }}
+        """)
+        h_layout = QHBoxLayout(header)
+        h_layout.setContentsMargins(16, 0, 16, 0)
 
-        self.btn_load = QPushButton("📂 Load Session Image")
+        title_lbl = QLabel("Grape Analyzer")
+        title_lbl.setStyleSheet(f"""
+            color: {_C['text']};
+            font-size: 15px;
+            font-weight: bold;
+            background: transparent;
+            border: none;
+        """)
+
+        self.fiji_badge = QLabel("Fiji: checking…")
+        self.fiji_badge.setStyleSheet(f"""
+            color: {_C['subtext']};
+            font-size: 11px;
+            background: transparent;
+            border: none;
+        """)
+
+        h_layout.addWidget(title_lbl)
+        h_layout.addStretch()
+        h_layout.addWidget(self.fiji_badge)
+        root.addWidget(header)
+
+        # ── Toolbar ───────────────────────────────────────────────────────────
+        toolbar_frame = QWidget()
+        toolbar_frame.setFixedHeight(56)
+        toolbar_frame.setStyleSheet(f"""
+            QWidget {{
+                background: {_C['surface']};
+                border-bottom: 1px solid {_C['border']};
+            }}
+        """)
+        toolbar = QHBoxLayout(toolbar_frame)
+        toolbar.setContentsMargins(12, 8, 12, 8)
+        toolbar.setSpacing(10)
+
+        self.btn_load = QPushButton("  Load Image")
+        self.btn_load.setFixedHeight(36)
+        self.btn_load.setStyleSheet(self._btn_style(_C['blue_dark'], _C['blue_hover']))
         self.btn_load.clicked.connect(self._load_image)
+
+        self.lbl_image = QLabel("No image selected")
+        self.lbl_image.setStyleSheet(f"color: {_C['subtext']}; font-size: 12px; background: transparent; border: none;")
+
+        # vertical divider
+        div = QFrame()
+        div.setFrameShape(QFrame.VLine)
+        div.setStyleSheet(f"color: {_C['border']}; background: {_C['border']};")
+        div.setFixedWidth(1)
+
+        lbl_day = QLabel("Day")
+        lbl_day.setStyleSheet(f"color: {_C['subtext']}; font-size: 12px; background: transparent; border: none;")
 
         self.spin_day = QSpinBox()
         self.spin_day.setRange(0, 300)
-        self.spin_day.setPrefix("Day: ")
-        self.spin_day.setFixedWidth(90)
+        self.spin_day.setFixedSize(72, 34)
+        self.spin_day.setStyleSheet(f"""
+            QSpinBox {{
+                background: {_C['bg']};
+                color: {_C['text']};
+                border: 1px solid {_C['border']};
+                border-radius: 6px;
+                padding: 2px 6px;
+                font-size: 13px;
+            }}
+            QSpinBox::up-button, QSpinBox::down-button {{
+                background: {_C['border']};
+                border-radius: 3px;
+                width: 16px;
+            }}
+        """)
 
-        self.btn_run = QPushButton("▶ Run Analysis")
-        self.btn_run.clicked.connect(self._run_analysis)
+        self.btn_run = QPushButton("  Run Analysis")
+        self.btn_run.setFixedHeight(36)
+        self.btn_run.setStyleSheet(self._btn_style(_C['green_dark'], _C['green_hover'], disabled=True))
         self.btn_run.setEnabled(False)
+        self.btn_run.clicked.connect(self._run_analysis)
 
-        self.btn_export = QPushButton("💾 Export Excel")
-        self.btn_export.clicked.connect(self._export)
+        self.btn_export = QPushButton("  Export Excel")
+        self.btn_export.setFixedHeight(36)
+        self.btn_export.setStyleSheet(self._btn_style(_C['amber_dark'], _C['amber_hover'], disabled=True))
         self.btn_export.setEnabled(False)
-
-        self.lbl_image = QLabel("No image loaded")
-        self.lbl_image.setStyleSheet("color: #aaa; font-style: italic;")
+        self.btn_export.clicked.connect(self._export)
 
         toolbar.addWidget(self.btn_load)
         toolbar.addWidget(self.lbl_image)
         toolbar.addStretch()
+        toolbar.addWidget(div)
+        toolbar.addSpacing(4)
+        toolbar.addWidget(lbl_day)
         toolbar.addWidget(self.spin_day)
+        toolbar.addSpacing(4)
         toolbar.addWidget(self.btn_run)
         toolbar.addWidget(self.btn_export)
-        layout.addLayout(toolbar)
+        root.addWidget(toolbar_frame)
 
-        # ── Pipeline Viewer ──
+        # ── Content area ──────────────────────────────────────────────────────
+        content = QWidget()
+        content_layout = QVBoxLayout(content)
+        content_layout.setContentsMargins(12, 10, 12, 6)
+        content_layout.setSpacing(8)
+
+        # Pipeline Viewer
         from ui.pipeline_viewer import PipelineViewer
         self.pipeline_viewer = PipelineViewer()
-        self.pipeline_viewer.setFixedHeight(185)
+        self.pipeline_viewer.setFixedHeight(190)
         self.pipeline_viewer.step_clicked.connect(self._show_full_step)
-        layout.addWidget(self.pipeline_viewer)
+        content_layout.addWidget(self.pipeline_viewer)
 
-        # ── Results Table ──
+        # Stacked: empty state vs results table
+        self.stack = QStackedWidget()
+
+        # -- Empty state panel --
+        empty_panel = QWidget()
+        empty_panel.setStyleSheet(f"""
+            QWidget {{
+                background: {_C['surface']};
+                border: 1px solid {_C['border']};
+                border-radius: 10px;
+            }}
+        """)
+        ep_layout = QVBoxLayout(empty_panel)
+        ep_layout.setAlignment(Qt.AlignCenter)
+
+        icon_lbl = QLabel("🍇")
+        icon_lbl.setAlignment(Qt.AlignCenter)
+        icon_lbl.setStyleSheet("font-size: 48px; background: transparent; border: none;")
+
+        heading = QLabel("No analysis loaded")
+        heading.setAlignment(Qt.AlignCenter)
+        heading.setStyleSheet(f"color: {_C['text']}; font-size: 18px; font-weight: bold; background: transparent; border: none;")
+
+        steps_lbl = QLabel(
+            "1.  Click  Load Image  and select a session photograph\n"
+            "2.  Set the study Day number (0 – 300)\n"
+            "3.  Click  Run Analysis  —  results will appear here"
+        )
+        steps_lbl.setAlignment(Qt.AlignCenter)
+        steps_lbl.setStyleSheet(f"color: {_C['subtext']}; font-size: 13px; line-height: 1.8; background: transparent; border: none;")
+
+        ep_layout.addWidget(icon_lbl)
+        ep_layout.addSpacing(8)
+        ep_layout.addWidget(heading)
+        ep_layout.addSpacing(10)
+        ep_layout.addWidget(steps_lbl)
+
+        # -- Results table --
         from ui.results_table import ResultsTable
         self.results_table = ResultsTable()
-        layout.addWidget(self.results_table)
 
-        # ── Progress bar ──
+        self.stack.addWidget(empty_panel)   # index 0
+        self.stack.addWidget(self.results_table)  # index 1
+        self.stack.setCurrentIndex(0)
+        content_layout.addWidget(self.stack)
+
+        # Progress bar
         self.progress = QProgressBar()
         self.progress.setVisible(False)
-        self.progress.setTextVisible(True)
-        layout.addWidget(self.progress)
+        self.progress.setFixedHeight(6)
+        self.progress.setTextVisible(False)
+        self.progress.setStyleSheet(f"""
+            QProgressBar {{
+                background: {_C['surface']};
+                border-radius: 3px;
+                border: none;
+            }}
+            QProgressBar::chunk {{
+                background: {_C['progress_fg']};
+                border-radius: 3px;
+            }}
+        """)
+        content_layout.addWidget(self.progress)
 
-        # ── Status bar ──
+        root.addWidget(content)
+
+        # Status bar
         self.status = QStatusBar()
+        self.status.setStyleSheet(f"""
+            QStatusBar {{
+                background: {_C['surface']};
+                color: {_C['subtext']};
+                border-top: 1px solid {_C['border']};
+                font-size: 12px;
+                padding: 2px 10px;
+            }}
+        """)
         self.setStatusBar(self.status)
         self.status.showMessage("Ready — load a session image to begin.")
 
+    @staticmethod
+    def _btn_style(bg: str, hover: str, disabled: bool = False) -> str:
+        dis = f"""
+            QPushButton:disabled {{
+                background: {_C['disabled_bg']};
+                color: {_C['disabled_txt']};
+                border: none;
+            }}
+        """ if disabled else ""
+        return f"""
+            QPushButton {{
+                background: {bg};
+                color: white;
+                border: none;
+                border-radius: 7px;
+                padding: 0 16px;
+                font-size: 13px;
+                font-weight: 600;
+            }}
+            QPushButton:hover {{ background: {hover}; }}
+            QPushButton:pressed {{ background: {hover}; opacity: 0.85; }}
+            {dis}
+        """
+
+    # ─────────────────────────────── Fiji detection ──────────────────────────
+
     def _setup_imagej(self):
-        """Auto-detect Fiji/ImageJ; prompt the user to browse if not found."""
+        """Auto-detect Fiji/ImageJ; update badge and optionally prompt user."""
         try:
             from core.color_engine import find_imagej
             path = find_imagej()
-            self.status.showMessage(
-                f"ImageJ ready: {os.path.basename(path)}"
-                " — measurements will use Fiji"
-            )
+            self.fiji_badge.setText(f"Fiji: {os.path.basename(os.path.dirname(path))}")
+            self.fiji_badge.setStyleSheet(f"color: {_C['fiji_ok']}; font-size: 11px; background: transparent; border: none;")
+            self.status.showMessage(f"Fiji ready — measurements will use ImageJ  ({os.path.basename(path)})")
         except FileNotFoundError:
+            self.fiji_badge.setText("Fiji: not found")
+            self.fiji_badge.setStyleSheet(f"color: {_C['fiji_warn']}; font-size: 11px; background: transparent; border: none;")
+
             box = QMessageBox(self)
-            box.setWindowTitle("Fiji/ImageJ Not Found")
+            box.setWindowTitle("Fiji / ImageJ Not Found")
             box.setText(
-                "Fiji/ImageJ was not found automatically.\n\n"
-                "Install from https://fiji.sc  (free, one click)\n"
+                "Fiji was not found automatically.\n\n"
+                "Install from  fiji.sc  (free, one click)\n"
                 "or locate the existing executable manually.\n\n"
-                "Without Fiji the app will use built-in Python formulas\n"
-                "(mathematically identical results)."
+                "Without Fiji the app uses built-in Python formulas\n"
+                "(mathematically equivalent results)."
             )
             browse_btn = box.addButton("Browse for Fiji…", QMessageBox.AcceptRole)
             box.addButton("Use Python Formulas", QMessageBox.RejectRole)
             box.exec()
             if box.clickedButton() is browse_btn:
-                path, _ = QFileDialog.getOpenFileName(
-                    self, "Locate Fiji / ImageJ Executable"
-                )
+                path, _ = QFileDialog.getOpenFileName(self, "Locate Fiji / ImageJ Executable")
                 if path:
                     from core.color_engine import set_imagej_path
                     set_imagej_path(path)
-                    self.status.showMessage(
-                        f"ImageJ set: {os.path.basename(path)}"
-                    )
+                    self.fiji_badge.setText(f"Fiji: {os.path.basename(path)}")
+                    self.fiji_badge.setStyleSheet(f"color: {_C['fiji_ok']}; font-size: 11px; background: transparent; border: none;")
+                    self.status.showMessage(f"Fiji set: {os.path.basename(path)}")
                     return
-            self.status.showMessage(
-                "Using Python formulas (Fiji not configured)"
-            )
+            self.status.showMessage("Using Python formulas — Fiji not configured")
 
-    # ─────────────────────────────── Actions ─────────────────────────────
+    # ─────────────────────────────── Actions ─────────────────────────────────
 
     def _load_image(self):
         path, _ = QFileDialog.getOpenFileName(
@@ -152,6 +352,7 @@ class MainWindow(QMainWindow):
         self._current_image_path = path
         name = os.path.basename(path)
         self.lbl_image.setText(name)
+        self.lbl_image.setStyleSheet(f"color: {_C['text']}; font-size: 12px; background: transparent; border: none;")
         self.btn_run.setEnabled(True)
         self.status.showMessage(f"Loaded: {name}")
 
@@ -181,7 +382,6 @@ class MainWindow(QMainWindow):
         self.btn_export.setEnabled(True)
         self.progress.setVisible(False)
 
-        # Update pipeline viewer
         step_keys = [
             "step1_original", "step2_bg_removed", "step3_binary",
             "step4_day0",     "step5_session",    "step6_measured",
@@ -192,14 +392,14 @@ class MainWindow(QMainWindow):
             if img is not None:
                 self.pipeline_viewer.update_step(i, img)
 
-        # Update table
         self._results = pipeline_data.get("results", [])
         self.results_table.populate(self._results)
+        self.stack.setCurrentIndex(1)   # show table, hide empty state
 
         n = len(self._results)
-        self.status.showMessage(
-            f"Analysis complete — {n} grapes measured (Day {self.spin_day.value()})"
-        )
+        day = self.spin_day.value()
+        self.setWindowTitle(f"Grape Analyzer — Day {day}  ({n} grapes)")
+        self.status.showMessage(f"Analysis complete — {n} grapes measured   Day {day}")
 
     def _on_error(self, msg: str):
         self.btn_run.setEnabled(True)
@@ -208,7 +408,6 @@ class MainWindow(QMainWindow):
         self.status.showMessage("Error — see dialog for details.")
 
     def _show_full_step(self, step_idx: int):
-        """Open a scrollable full-size view of the selected pipeline step."""
         step_keys = [
             "step1_original", "step2_bg_removed", "step3_binary",
             "step4_day0",     "step5_session",    "step6_measured",
@@ -219,14 +418,13 @@ class MainWindow(QMainWindow):
         img = self._pipeline_steps.get(key) if key else None
         if img is None:
             return
-
         dlg = _FullImageDialog(img, parent=self)
         dlg.exec()
 
     def _export(self):
         if not self._results:
             return
-        day  = self.spin_day.value()
+        day = self.spin_day.value()
         path, _ = QFileDialog.getSaveFileName(
             self, "Save Excel",
             f"grape_analysis_day{day}.xlsx",
@@ -237,7 +435,7 @@ class MainWindow(QMainWindow):
         try:
             from core.exporter import export_to_excel
             export_to_excel(self._results, day, path)
-            self.status.showMessage(f"Saved: {path}")
+            self.status.showMessage(f"Saved: {os.path.basename(path)}")
         except Exception as e:
             QMessageBox.critical(self, "Export Error", str(e))
 
@@ -250,7 +448,8 @@ class _FullImageDialog(QDialog):
     def __init__(self, image_rgb: np.ndarray, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Pipeline Step — Full Size")
-        self.resize(900, 700)
+        self.resize(960, 720)
+        self.setStyleSheet(f"background: {_C['bg']}; color: {_C['text']};")
 
         h, w = image_rgb.shape[:2]
         img  = np.ascontiguousarray(image_rgb, dtype=np.uint8)
@@ -264,13 +463,20 @@ class _FullImageDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidget(lbl)
         scroll.setWidgetResizable(False)
-
-        layout = QVBoxLayout(self)
-        layout.addWidget(scroll)
+        scroll.setStyleSheet(f"border: 1px solid {_C['border']}; border-radius: 6px;")
 
         btn_close = QPushButton("Close")
+        btn_close.setFixedHeight(34)
+        btn_close.setStyleSheet(MainWindow._btn_style(
+            _C['blue_dark'], _C['blue_hover']
+        ))
         btn_close.clicked.connect(self.accept)
-        layout.addWidget(btn_close)
+
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(12, 12, 12, 12)
+        layout.setSpacing(8)
+        layout.addWidget(scroll)
+        layout.addWidget(btn_close, alignment=Qt.AlignRight)
 
 
 # ─────────────────────────────── Background worker ───────────────────────────
@@ -291,11 +497,11 @@ class AnalysisWorker(QThread):
             import numpy as np
             from PIL import Image as PILImage
 
-            from config import MASKS_PATH, META_PATH, REFERENCE_ORIGINAL_PATH
+            from config import MASKS_PATH, META_PATH, REFERENCE_ORIGINAL_PATH, REF_DAY
             from core.image_pipeline import generate_bg_removed, generate_binary
             from core.mask_engine import (
                 load_reference_masks, align_image, adapt_mask,
-                draw_boundaries, draw_filled,
+                refine_mask_grabcut, draw_boundaries, draw_filled,
                 normalize_to_reference, area_to_original_scale,
             )
             from core.color_engine import measure_all_grapes
@@ -303,8 +509,6 @@ class AnalysisWorker(QThread):
             # ── 1. Load → normalize → align ──────────────────────────────
             self.progress.emit(5, "Loading image…")
             raw_rgb = np.array(PILImage.open(self.image_path).convert("RGB"))
-
-            # Step 1: resize to reference resolution before anything else
             original_rgb, original_dims = normalize_to_reference(raw_rgb)
 
             self.progress.emit(10, "Aligning to reference…")
@@ -314,38 +518,41 @@ class AnalysisWorker(QThread):
             else:
                 aligned  = original_rgb
 
-            # ── 2. Background removal ────────────────────────────────────
+            # ── 2. Background removal ─────────────────────────────────────
             self.progress.emit(18, "Removing background…")
             bg_removed = generate_bg_removed(aligned)
 
-            # ── 3. Binary segmentation ───────────────────────────────────
-            self.progress.emit(26, "Generating binary segmentation…")
+            # ── 3. Binary segmentation ────────────────────────────────────
+            self.progress.emit(26, "Generating binary mask…")
             binary = generate_binary(bg_removed)
 
-            # ── 4. Load reference masks ──────────────────────────────────
+            # ── 4. Load reference masks ───────────────────────────────────
             self.progress.emit(35, "Loading reference masks…")
             reference_masks, metadata = load_reference_masks(MASKS_PATH, META_PATH)
 
-            # ── 5a. Adapt all masks ───────────────────────────────────────
+            # ── 5a. Adapt + refine all masks ──────────────────────────────
             session_masks = {}
-            n             = len(metadata)
+            n = len(metadata)
             for idx, (gid_str, _) in enumerate(metadata.items()):
                 gid = int(gid_str)
-                pct = 35 + int(30 * idx / n)
-                self.progress.emit(pct, f"Adapting mask {gid}/{n}…")
-                session_masks[gid] = adapt_mask(reference_masks[gid], binary, gid)
+                pct = 35 + int(40 * idx / n)
+                self.progress.emit(pct, f"Fitting mask {gid} / {n}…")
+                raw_mask = adapt_mask(
+                    reference_masks[gid], binary, gid,
+                    day=self.day, ref_day=REF_DAY,
+                )
+                session_masks[gid] = refine_mask_grabcut(aligned, raw_mask)
 
-            # ── 5b. Measure all grapes — single ImageJ call ───────────────
-            self.progress.emit(65, "Measuring grapes (ImageJ)…")
+            # ── 5b. Measure all grapes ────────────────────────────────────
+            self.progress.emit(78, "Measuring with ImageJ…")
             measurements = measure_all_grapes(aligned, session_masks, metadata)
             measurements_by_id = {m["grape_id"]: m for m in measurements}
 
-            # ── 5c. Attach metadata + Step 3 area correction ─────────────
+            # ── 5c. Attach metadata + area correction ─────────────────────
             results = []
             for gid_str, meta in metadata.items():
                 gid  = int(gid_str)
                 meas = dict(measurements_by_id.get(gid, {}))
-                # Correct area from reference resolution back to original scale
                 if "area_px" in meas:
                     meas["area_px"] = area_to_original_scale(meas["area_px"], original_dims)
                 meas.update({
@@ -356,13 +563,13 @@ class AnalysisWorker(QThread):
                 })
                 results.append(meas)
 
-            # ── 6. Build overlay images ──────────────────────────────────
-            self.progress.emit(88, "Building visualizations…")
+            # ── 6. Build overlay images ───────────────────────────────────
+            self.progress.emit(90, "Building visualizations…")
             day0_ov = draw_boundaries(aligned, reference_masks, metadata, style="dashed")
             sess_ov = draw_boundaries(aligned, session_masks,   metadata, style="solid")
             meas_ov = draw_filled(aligned, session_masks, metadata)
 
-            self.progress.emit(98, "Done!")
+            self.progress.emit(99, "Done.")
             self.finished.emit({
                 "steps": {
                     "step1_original":   aligned,

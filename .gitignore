@@ -8,3 +8,6 @@ __pycache__/
 assets/reference_original.jpg
 .DS_Store
 app/models/
+.claude/
+.code-review-graph/
+outputs/
