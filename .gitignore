@@ -11,3 +11,4 @@ app/models/
 .claude/
 .code-review-graph/
 outputs/
+CLAUDE.md
