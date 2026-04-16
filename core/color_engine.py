@@ -24,13 +24,30 @@ _IMAGEJ_PATH: str | None = None   # cached after first successful lookup
 
 _FIJI_CANDIDATES: dict[str, list[str]] = {
     "Darwin": [
+        # Apple Silicon (ARM) — custom install location used by this project
         "/Applications/FijiWorking/Fiji.app/Contents/MacOS/fiji-macos-arm64",
+        # Intel Mac — custom install location
+        "/Applications/FijiWorking/Fiji.app/Contents/MacOS/fiji-macos-x86_64",
+        # Apple Silicon — standard Fiji install
+        "/Applications/Fiji.app/Contents/MacOS/fiji-macos-arm64",
+        # Intel Mac — standard Fiji install
+        "/Applications/Fiji.app/Contents/MacOS/fiji-macos-x86_64",
+        # Older Fiji releases (pre-2023 launcher name)
+        "/Applications/FijiWorking/Fiji.app/Contents/MacOS/ImageJ-macosx",
+        "/Applications/Fiji.app/Contents/MacOS/ImageJ-macosx",
     ],
     "Windows": [
+        # Fiji.app in drive root (common quick-install location)
         "C:/Fiji.app/fiji-windows-x64.exe",
+        # Fiji.app in Program Files
         "C:/Program Files/Fiji.app/fiji-windows-x64.exe",
+        # Older launcher name — drive root
         "C:/Fiji.app/ImageJ-win64.exe",
+        # Older launcher name — Program Files
         "C:/Program Files/Fiji.app/ImageJ-win64.exe",
+        # User home directory installs
+        os.path.expanduser("~/Fiji.app/fiji-windows-x64.exe").replace("\\", "/"),
+        os.path.expanduser("~/Fiji.app/ImageJ-win64.exe").replace("\\", "/"),
     ],
     "Linux": [
         "/opt/Fiji.app/fiji-linux-x64",
@@ -106,12 +123,15 @@ def measure_all_grapes(
         # ── Call ImageJ ─────────────────────────────────────────────────────
         csv_path   = os.path.join(tmpdir, "results.csv")
         n          = max(gids) if gids else 36
-        macro_args = f"{img_path}|{masks_dir}|{csv_path}|{n}"
+        # Fiji's IJM macro requires forward slashes on all platforms
+        def _fwd(p: str) -> str:
+            return p.replace("\\", "/")
+        macro_args = f"{_fwd(img_path)}|{_fwd(masks_dir)}|{_fwd(csv_path)}|{n}"
 
         try:
             proc = subprocess.run(
                 [ij, "--headless", "--console",
-                 "-macro", os.path.abspath(_MACRO_PATH), macro_args],
+                 "-macro", os.path.abspath(_MACRO_PATH).replace("\\", "/"), macro_args],
                 capture_output=True,
                 text=True,
                 timeout=300,   # 5-minute budget for the full batch

@@ -12,3 +12,5 @@ app/models/
 .code-review-graph/
 outputs/
 CLAUDE.md
+*.xlsx
+*.csv

@@ -1,6 +1,7 @@
 #!/bin/bash
-# run.sh - One-click launcher for Grape Analyzer on Mac
+# run.sh - One-click launcher for Grape Analyzer on Mac / Linux
 # Handles: venv setup, pip install, app launch
+# Windows users: use run.bat instead
 
 echo ""
 echo "============================================"
@@ -28,7 +29,7 @@ pip install -q -r requirements.txt
 
 echo ""
 echo "Setup complete."
-echo "Note: Fiji must be installed at /Applications/FijiWorking/Fiji.app"
+echo "Note: Fiji must be installed (e.g. /Applications/Fiji.app or /Applications/FijiWorking/Fiji.app)"
 echo "      or locate it via the Settings dialog on first run."
 echo ""
 
